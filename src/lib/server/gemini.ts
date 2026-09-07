@@ -21,53 +21,106 @@ const SPEAKER_COLORS = [
 	'#0891b2'  // Cyan
 ];
 
+function normalizeMimeType(filePath: string, detectedMime?: string): string {
+	const ext = path.extname(filePath).toLowerCase();
+	if (ext === '.wav') return 'audio/wav';
+	if (ext === '.mp3') return 'audio/mp3';
+	if (ext === '.m4a') return 'audio/m4a';
+	if (ext === '.aac') return 'audio/aac';
+	if (ext === '.ogg') return 'audio/ogg';
+	if (ext === '.flac') return 'audio/flac';
+	if (ext === '.webm') return 'audio/webm';
+	return detectedMime || 'audio/wav';
+}
+
 /**
- * Upload an audio file to Google AI Files API
+ * Upload an audio file to Google AI Files API using the Resumable Upload Protocol
+ * Supports large 45+ minute files (up to 2GB) reliably
  */
-async function uploadAudioToGoogle(filePath: string, mimeType: string, apiKey: string): Promise<{ uri: string; mimeType: string }> {
+async function uploadAudioToGoogle(filePath: string, rawMimeType: string, apiKey: string): Promise<{ uri: string; mimeType: string }> {
 	const fileBuffer = await fs.readFile(filePath);
 	const fileName = path.basename(filePath);
+	const mimeType = normalizeMimeType(filePath, rawMimeType);
+	const numBytes = fileBuffer.length;
 
-	// Upload using Google AI Files API (resumable/direct upload protocol)
-	const uploadUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`;
+	// Step 1: Initiate Resumable Upload Session
+	const initUrl = `https://generativelanguage.googleapis.com/upload/v1beta/files?key=${apiKey}`;
 
-	const metadata = {
-		file: {
-			display_name: fileName
-		}
-	};
+	const initRes = await fetch(initUrl, {
+		method: 'POST',
+		headers: {
+			'X-Goog-Upload-Protocol': 'resumable',
+			'X-Goog-Upload-Command': 'start',
+			'X-Goog-Upload-Header-Content-Length': numBytes.toString(),
+			'X-Goog-Upload-Header-Content-Type': mimeType,
+			'Content-Type': 'application/json'
+		},
+		body: JSON.stringify({
+			file: {
+				display_name: fileName
+			}
+		})
+	});
 
-	const boundary = `----WebKitFormBoundary${Math.random().toString(36).substring(2)}`;
-	const metadataPart = Buffer.from(
-		`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`
-	);
-	const fileHeaderPart = Buffer.from(
-		`--${boundary}\r\nContent-Type: ${mimeType}\r\n\r\n`
-	);
-	const footerPart = Buffer.from(`\r\n--${boundary}--\r\n`);
+	if (!initRes.ok) {
+		const errText = await initRes.text();
+		throw new Error(`Failed to start Google Files upload session (${initRes.status}): ${errText}`);
+	}
 
-	const body = Buffer.concat([metadataPart, fileHeaderPart, fileBuffer, footerPart]);
+	const uploadUrl = initRes.headers.get('x-goog-upload-url') || initRes.headers.get('X-Goog-Upload-URL');
+	if (!uploadUrl) {
+		throw new Error('Google Files API did not return an upload URL.');
+	}
 
+	// Step 2: Upload File Bytes
 	const uploadRes = await fetch(uploadUrl, {
 		method: 'POST',
 		headers: {
-			'X-Goog-Upload-Command': 'upload, finalize',
-			'X-Goog-Upload-Header-Content-Length': fileBuffer.length.toString(),
-			'X-Goog-Upload-Header-Content-Type': mimeType,
-			'Content-Type': `multipart/related; boundary=${boundary}`
+			'Content-Length': numBytes.toString(),
+			'X-Goog-Upload-Offset': '0',
+			'X-Goog-Upload-Command': 'upload, finalize'
 		},
-		body: body
+		body: fileBuffer
 	});
 
 	if (!uploadRes.ok) {
 		const errText = await uploadRes.text();
-		throw new Error(`Google Files API upload failed (${uploadRes.status}): ${errText}`);
+		throw new Error(`Google Files upload failed (${uploadRes.status}): ${errText}`);
 	}
 
 	const uploadData = await uploadRes.json();
+	const uploadedFile = uploadData.file;
+
+	if (!uploadedFile || !uploadedFile.uri) {
+		throw new Error(`Invalid file upload response: ${JSON.stringify(uploadData)}`);
+	}
+
+	// Step 3: Wait for file to become ACTIVE if in PROCESSING state
+	let fileState = uploadedFile.state;
+	let fileUri = uploadedFile.uri;
+	let fileNameResource = uploadedFile.name; // e.g. "files/abc123"
+
+	let attempts = 0;
+	while (fileState === 'PROCESSING' && attempts < 30) {
+		await new Promise((r) => setTimeout(r, 2000));
+		attempts++;
+
+		const checkRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/${fileNameResource}?key=${apiKey}`);
+		if (checkRes.ok) {
+			const checkData = await checkRes.json();
+			fileState = checkData.state;
+			if (fileState === 'ACTIVE') {
+				fileUri = checkData.uri || fileUri;
+				break;
+			} else if (fileState === 'FAILED') {
+				throw new Error(`Audio processing on Google servers failed: ${checkData.error?.message || 'Unknown error'}`);
+			}
+		}
+	}
+
 	return {
-		uri: uploadData.file.uri,
-		mimeType: uploadData.file.mimeType || mimeType
+		uri: fileUri,
+		mimeType: uploadedFile.mimeType || mimeType
 	};
 }
 
@@ -76,7 +129,7 @@ async function uploadAudioToGoogle(filePath: string, mimeType: string, apiKey: s
  */
 export async function transcribeAudioWithGemini(
 	audioFilePath: string,
-	mimeType: string,
+	rawMimeType: string,
 	options: TranscriptionOptions = {}
 ): Promise<{
 	fullText: string;
@@ -91,8 +144,8 @@ export async function transcribeAudioWithGemini(
 		throw new Error('Gemini API Key is not configured. Please add your key in Settings.');
 	}
 
-	// 1. Upload audio file to Google AI Files API
-	const uploadedFile = await uploadAudioToGoogle(audioFilePath, mimeType, apiKey);
+	// 1. Upload audio file to Google AI Files API via resumable protocol
+	const uploadedFile = await uploadAudioToGoogle(audioFilePath, rawMimeType, apiKey);
 
 	// 2. Prepare Interactions API request payload
 	const mode = options.mode || 'verbatim';
