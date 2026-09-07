@@ -1,0 +1,39 @@
+{
+	"name": "my-meetings",
+	"private": true,
+	"version": "0.1.0",
+	"type": "module",
+	"main": "electron/main.cjs",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build",
+		"preview": "vite preview",
+		"app:dev": "concurrently -k -s first \"npm run dev\" \"wait-on tcp:5173 && electron . --dev\"",
+		"app:build": "vite build",
+		"app:start": "electron .",
+		"app:rebuild": "vite build && electron .",
+		"setup:shortcuts": "powershell -ExecutionPolicy Bypass -File ./scripts/create-windows-shortcut.ps1",
+		"prepare": "svelte-kit sync || echo ''",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-node": "^5.5.7",
+		"@sveltejs/kit": "^2.63.0",
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"@tailwindcss/vite": "^4.3.0",
+		"@types/node": "^26.2.0",
+		"concurrently": "^9.2.4",
+		"cross-env": "^10.1.0",
+		"electron": "^41.7.1",
+		"svelte": "^5.56.1",
+		"svelte-check": "^4.6.0",
+		"tailwindcss": "^4.3.0",
+		"typescript": "^6.0.3",
+		"vite": "^8.0.16",
+		"wait-on": "^9.1.0"
+	},
+	"dependencies": {
+		"@lucide/svelte": "^1.31.0",
+		"clsx": "^2.1.1"
+	}
+}

@@ -1,0 +1,16 @@
+﻿node_modules/
+.svelte-kit/
+build/
+dist/
+.env
+.env.*
+!.env.example
+data/audio/*.wav
+data/audio/*.mp3
+data/audio/*.m4a
+data/audio/*.ogg
+data/audio/*.webm
+data/audio/*.flac
+*.log
+.DS_Store
+Thumbs.db
