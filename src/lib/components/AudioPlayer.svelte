@@ -6,9 +6,10 @@
 		currentTime?: number;
 		duration?: number;
 		onTimeUpdate?: (time: number) => void;
+		onLoadedMetadata?: (duration: number) => void;
 	}
 
-	let { src, currentTime = $bindable(0), duration = $bindable(0), onTimeUpdate }: Props = $props();
+	let { src, currentTime = $bindable(0), duration = $bindable(0), onTimeUpdate, onLoadedMetadata }: Props = $props();
 
 	let audioElement: HTMLAudioElement | undefined = $state();
 	let isPlaying = $state(false);
@@ -69,6 +70,7 @@
 	function handleLoadedMetadata() {
 		if (audioElement) {
 			duration = audioElement.duration;
+			onLoadedMetadata?.(duration);
 		}
 	}
 </script>

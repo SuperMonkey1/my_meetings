@@ -204,7 +204,35 @@ export async function transcribeAudioWithGemini(
 	}
 
 	const interaction = await res.json();
-	const outputText = interaction.output_text || interaction.outputText || '';
+	console.log('Interactions API response received. Mode:', mode);
+
+	// Extract text thoroughly from all possible response locations
+	let outputText = interaction.output_text || interaction.outputText || '';
+
+	if (!outputText && Array.isArray(interaction.outputs)) {
+		outputText = interaction.outputs
+			.map((o: any) => o.text || o.content?.text || (o.content?.parts?.map((p: any) => p.text).join('') || ''))
+			.filter(Boolean)
+			.join('\n');
+	}
+
+	if (!outputText && Array.isArray(interaction.steps)) {
+		const parts: string[] = [];
+		for (const step of interaction.steps) {
+			for (const c of step.content || []) {
+				if (typeof c === 'string') parts.push(c);
+				else if (c.text) parts.push(c.text);
+				else if (Array.isArray(c.parts)) {
+					for (const p of c.parts) {
+						if (p.text) parts.push(p.text);
+					}
+				}
+			}
+		}
+		if (parts.length > 0) {
+			outputText = parts.join('\n');
+		}
+	}
 
 	// 3. Extract word annotations from interaction steps
 	const wordAnnotations: WordAnnotation[] = [];
@@ -318,24 +346,44 @@ export async function transcribeAudioWithGemini(
 				spk.percentage = Math.round(((spk.talkTimeSeconds || 0) / totalTalkTime) * 100);
 			}
 		}
+
+		if (!outputText) {
+			outputText = segments.map((s) => `${s.speakerName}: ${s.text}`).join('\n\n');
+		}
 	} else if (outputText) {
-		// Fallback single segment if word annotations are not present
+		// Smart mode or single-text fallback: break text into clean readable paragraph segments
 		speakers['spk_1'] = {
 			id: 'spk_1',
-			name: 'Speaker 1',
+			name: mode === 'smart' ? 'Smart Transcript' : 'Speaker 1',
 			color: SPEAKER_COLORS[0],
 			talkTimeSeconds: 0,
 			percentage: 100
 		};
-		segments.push({
-			id: 'seg-1',
-			speaker: 'spk_1',
-			speakerName: 'Speaker 1',
-			startTime: 0,
-			endTime: 0,
-			text: outputText,
-			words: []
-		});
+
+		const paragraphs = outputText.split(/\n\s*\n/).filter((p) => p.trim());
+		if (paragraphs.length > 0) {
+			paragraphs.forEach((para, idx) => {
+				segments.push({
+					id: `seg-${idx + 1}`,
+					speaker: 'spk_1',
+					speakerName: mode === 'smart' ? 'Smart Transcript' : 'Speaker 1',
+					startTime: 0,
+					endTime: 0,
+					text: para.trim(),
+					words: []
+				});
+			});
+		} else {
+			segments.push({
+				id: 'seg-1',
+				speaker: 'spk_1',
+				speakerName: mode === 'smart' ? 'Smart Transcript' : 'Speaker 1',
+				startTime: 0,
+				endTime: 0,
+				text: outputText.trim(),
+				words: []
+			});
+		}
 	}
 
 	return {

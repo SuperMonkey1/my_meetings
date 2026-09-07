@@ -11,6 +11,7 @@
 	let { open, onclose }: Props = $props();
 
 	let selectedFile: File | null = $state(null);
+	let fileDuration = $state(0);
 	let title = $state('');
 	let description = $state('');
 	let mode = $state<'verbatim' | 'smart'>('verbatim');
@@ -51,9 +52,24 @@
 
 	function setFile(file: File) {
 		selectedFile = file;
+		fileDuration = 0;
 		if (!title) {
-			// Prepopulate title from file name
 			title = file.name.replace(/\.[^/.]+$/, '').replace(/[-_]/g, ' ');
+		}
+
+		// Pre-calculate audio duration using standard Web Audio
+		try {
+			const tempAudio = new Audio();
+			const objUrl = URL.createObjectURL(file);
+			tempAudio.src = objUrl;
+			tempAudio.onloadedmetadata = () => {
+				if (!isNaN(tempAudio.duration) && tempAudio.duration > 0) {
+					fileDuration = Math.round(tempAudio.duration);
+				}
+				URL.revokeObjectURL(objUrl);
+			};
+		} catch (e) {
+			console.warn('Could not probe audio duration:', e);
 		}
 	}
 
@@ -67,11 +83,12 @@
 			const meeting = await meetingStore.uploadAudio(
 				selectedFile,
 				title.trim() || selectedFile.name,
-				description.trim()
+				description.trim(),
+				fileDuration
 			);
 
 			if (meeting) {
-				uploadProgressText = 'Submitting to Gemini 3.5 Transcribe engine...';
+				uploadProgressText = 'Transcribing with Gemini 3.5 Transcribe engine...';
 				const vocabArray = customVocab
 					.split(/[,;\n]/)
 					.map((s) => s.trim())
@@ -141,7 +158,7 @@
 							<div>
 								<p class="text-xs font-semibold text-zinc-900">{selectedFile.name}</p>
 								<p class="text-[11px] text-zinc-400 mt-0.5">
-									{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB • Ready to transcribe
+									{(selectedFile.size / (1024 * 1024)).toFixed(2)} MB {#if fileDuration > 0}• {Math.floor(fileDuration / 60)}m {fileDuration % 60}s{/if} • Ready to transcribe
 								</p>
 							</div>
 						{:else}
@@ -171,7 +188,7 @@
 
 				<!-- Transcription Mode Options -->
 				<div>
-					<label class="block text-xs font-semibold text-zinc-700 mb-1.5">Transcription Mode</label>
+					<span class="block text-xs font-semibold text-zinc-700 mb-1.5">Transcription Mode</span>
 					<div class="grid grid-cols-2 gap-3">
 						<button
 							type="button"
